@@ -13,11 +13,11 @@
 
 namespace fs = std::filesystem;
 
-bool infect(PEParser& parser, Runtime& runtime) {
+void infect(PEParser& parser, Runtime& runtime) {
 	IMAGE_SECTION_HEADER* codeSection = parser.getSection(IMAGE_SCN_CNT_CODE, IMAGE_SCN_CNT_UNINITIALIZED_DATA);
 
 	if (!codeSection) {
-		return false;
+		return;
 	}
 
 	std::uintptr_t ip = reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)) + codeSection->VirtualAddress;
@@ -38,8 +38,6 @@ bool infect(PEParser& parser, Runtime& runtime) {
 	std::random_device rd;
 	std::mt19937 gen(rd());
 
-	std::vector<std::byte> newInstrs;
-
 	ZydisDecodedInstruction instr;
 
 	const std::byte breakpoint = static_cast<std::byte>(0xCC);
@@ -49,32 +47,22 @@ bool infect(PEParser& parser, Runtime& runtime) {
 			break;
 		}
 
+		std::vector<std::byte> instrBytes(&code[offset], &code[offset + instr.length]);
+
 		if (instr.mnemonic != ZYDIS_MNEMONIC_INT3) {
-			newInstrs.push_back(breakpoint);
+			code[offset++] = breakpoint;
 
 			for (int i = 0; i < instr.length - 1; i++) {
-				newInstrs.push_back(static_cast<std::byte>(gen()));
+				code[offset++] = static_cast<std::byte>(gen());
 			}
-
-			std::vector<std::byte> instrBytes(&code[offset], &code[offset + instr.length]);
 			const RuntimeInstruction runtimeInstr(instrBytes);
-
 			runtime.addInstruction(codeSection->VirtualAddress + offset, runtimeInstr);
-		}
-		else {
-			std::vector<std::byte> rawInstr(&code[offset], &code[offset + instr.length]);
-			newInstrs.insert(newInstrs.end(), rawInstr.begin(), rawInstr.end());
 		}
 		offset += instr.length;
 		remaining -= instr.length;
 		ip += instr.length;
 	}
-
-	if (!parser.replaceSection(codeSection, newInstrs)) {
-		std::cout << "Failed to replace code section!" << std::endl;
-		return false;
-	}
-	return true;
+	parser.replaceSection(codeSection, code);
 }
 
 int main(int argc, char* argv[]) {

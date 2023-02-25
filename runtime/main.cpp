@@ -32,6 +32,47 @@ std::uintptr_t getImageBase(const HANDLE hProcess) {
 	return reinterpret_cast<std::uintptr_t>(peb.ImageBaseAddress);
 }
 
+void relocate(std::byte* pImageBase) {
+	IMAGE_DOS_HEADER* pDosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(pImageBase);
+	IMAGE_NT_HEADERS* pNtHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(pImageBase + pDosHeader->e_lfanew);
+
+	uint32_t imageSize = pNtHeader->OptionalHeader.SizeOfImage;
+
+	// Allocate a new block of memory
+	std::byte* pNewImageBase = reinterpret_cast<std::byte*>(VirtualAlloc(nullptr, imageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+
+	if (!pNewImageBase) {
+		return;
+	}
+
+	// Initialize the radon0 and radon1
+	IMAGE_SECTION_HEADER* pSection = IMAGE_FIRST_SECTION(pNtHeader);
+
+	for (uint16_t i = 0; i < pNtHeader->FileHeader.NumberOfSections; i++) {
+		// .radon0 is the section containing the original instructions
+		// .radon1 is the section containing the payload
+
+		std::byte* pSectionAddr = pImageBase + pSection->VirtualAddress;
+
+		if (strcmp((char*)pSection->Name, ".radon0") == 0) {
+			radon0.insert(radon0.begin(), pSectionAddr, pSectionAddr + pSection->Misc.VirtualSize);
+		}
+		else if (strcmp((char*)pSection->Name, ".radon1") == 0) {
+			radon1.insert(radon1.begin(), pSectionAddr, pSectionAddr + pSection->Misc.VirtualSize);
+		}
+		pSection++;
+	}
+
+	memcpy(pNewImageBase, pImageBase, imageSize);
+
+	VirtualFree(pImageBase, 0, MEM_RELEASE);
+
+	void* oep = pNewImageBase + pNtHeader->OptionalHeader.AddressOfEntryPoint;
+
+	// Call the entry point of the new block of memory
+	((void(*)())oep)();
+}
+
 bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORMATION* pProcessInfo) {
 	// Decrypt the payload
 	payload.decrypt();
@@ -107,22 +148,22 @@ bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORM
 	return true;
 }
 
-bool handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
+void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 	const HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, false, debugEvent.dwThreadId);
 
 	if (!hThread || hThread == INVALID_HANDLE_VALUE) {
-		return false;
+		return;
 	}
 
 	SuspendThread(hThread);
 
-	CONTEXT context { 0 };
-	context.ContextFlags = CONTEXT_CONTROL;
+	CONTEXT ctx { 0 };
+	ctx.ContextFlags = CONTEXT_CONTROL;
 
-	if (!GetThreadContext(hThread, &context)) {
+	if (!GetThreadContext(hThread, &ctx)) {
 		ResumeThread(hThread);
 		CloseHandle(hThread);
-		return false;
+		return;
 	}
 
 	const std::uintptr_t imageBase = getImageBase(hProcess);
@@ -143,15 +184,15 @@ bool handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 		}
 	}
 
-	std::uintptr_t va = context.Rip - 1;
+	std::uintptr_t va = ctx.Rip - 1;
 	std::uintptr_t rva = va - imageBase;
 
 	if (!runtime.hasInstruction(rva)) {
-		context.Rip += 1;
-		SetThreadContext(hThread, &context);
+		ctx.Rip += 1;
+		SetThreadContext(hThread, &ctx);
 		ResumeThread(hThread);
 		CloseHandle(hThread);
-		return false;
+		return;
 	}
 
 	RuntimeInstruction runtimeInstr = runtime.getInstruction(rva);
@@ -161,16 +202,16 @@ bool handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 
 	const std::vector<std::byte> instrBytes = runtimeInstr.getBytes();
 
-	context.Rip -= 1;
+	ctx.Rip -= 1;
 
 	if (!WriteProcessMemory(hProcess, reinterpret_cast<void*>(va), &instrBytes[0], instrBytes.size(), nullptr)) {
 		// Re-encrypt the instruction
 		runtimeInstr.crypt();
 
-		SetThreadContext(hThread, &context);
+		SetThreadContext(hThread, &ctx);
 		ResumeThread(hThread);
 		CloseHandle(hThread);
-		return false;
+		return;
 	}
 
 	// Re-encrypt the instruction
@@ -178,11 +219,9 @@ bool handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 
 	runtime.setOldRVA(rva);
 
-	SetThreadContext(hThread, &context);
+	SetThreadContext(hThread, &ctx);
 	ResumeThread(hThread);
 	CloseHandle(hThread);
-
-	return true;
 }
 
 void handler(const HANDLE hProcess, const HANDLE hThread) {
@@ -208,35 +247,33 @@ void handler(const HANDLE hProcess, const HANDLE hThread) {
 	WaitForSingleObject(hProcess, INFINITE);
 }
 
+template <typename T, typename... Args>
+T invoke(void* func, Args... args) {
+	CONTEXT context = { 0 };
+	HANDLE hThread = GetCurrentThread();
+	context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+	GetThreadContext(hThread, &context);
+	context.Dr0 = reinterpret_cast<uintptr_t>(func);
+	context.Dr7 |= 0x00000001;
+	SetThreadContext(hThread, &context);
+
+	T result = ((T(*)())func)(args);
+
+	context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+	GetThreadContext(hThread, &context);
+	context.Dr0 = 0;
+	context.Dr7 &= 0xFFFFFFFE;
+	SetThreadContext(hThread, &context);
+
+	return result;
+}
+
 int main(int argc, char* argv[]) {
-	std::byte* hModule = reinterpret_cast<std::byte*>(GetModuleHandleA(nullptr));
-	IMAGE_DOS_HEADER* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(hModule);
+	std::byte* pImageBase = reinterpret_cast<std::byte*>(GetModuleHandleA(nullptr));
 
-	if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-		return EXIT_FAILURE;
-	}
-
-	IMAGE_NT_HEADERS* ntHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(hModule + dosHeader->e_lfanew);
-
-	if (ntHeader->Signature != IMAGE_NT_SIGNATURE) {
-		return EXIT_FAILURE;
-	}
-
-	IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(ntHeader);
-
-	for (uint16_t i = 0; i < ntHeader->FileHeader.NumberOfSections; i++) {
-		// .radon0 is the section containing the original instructions
-		// .radon1 is the section containing the payload
-
-		std::byte* pointerToRawDataVA = hModule + section->VirtualAddress;
-
-		if (strcmp((char*)section->Name, ".radon0") == 0) {
-			radon0.insert(radon0.begin(), pointerToRawDataVA, pointerToRawDataVA + section->Misc.VirtualSize);
-		}
-		else if (strcmp((char*)section->Name, ".radon1") == 0) {
-			radon1.insert(radon1.begin(), pointerToRawDataVA, pointerToRawDataVA + section->Misc.VirtualSize);
-		}
-		section++;
+	if (!relocated) {
+		relocated = true;
+		invoke(relocate, pImageBase);
 	}
 
 	if (radon0.size() == 0 || radon1.size() == 0) {
@@ -254,11 +291,11 @@ int main(int argc, char* argv[]) {
 		commandLine.append(argv[i]);
 	}
 
-	if (!execute(argv[0], const_cast<char*>(commandLine.c_str()), &processInfo)) {
+	if (!invoke(execute, argv[0], const_cast<char*>(commandLine.c_str()), &processInfo)) {
 		return EXIT_FAILURE;
 	}
 
-	handler(processInfo.hProcess, processInfo.hThread);
+	invoke(handler, processInfo.hProcess, processInfo.hThread);
 
 	if (processInfo.hProcess && processInfo.hProcess != INVALID_HANDLE_VALUE) {
 		CloseHandle(processInfo.hProcess);

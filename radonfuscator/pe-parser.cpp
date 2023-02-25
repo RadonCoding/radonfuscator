@@ -33,18 +33,18 @@ bool PEParser::parse(std::string filename, uint32_t extra) {
         return false;
     }
 
-    this->dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(this->pImage);
+    this->pDosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(this->pImage);
     
-    if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
+    if (pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
         UnmapViewOfFile(this->pImage);
         CloseHandle(this->hMapping);
         CloseHandle(this->hFile);
         return false;
     }
     
-    this->ntHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(this->pImage + this->dosHeader->e_lfanew);
+    this->pNtHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(this->pImage + this->pDosHeader->e_lfanew);
 
-    if (ntHeader->Signature != IMAGE_NT_SIGNATURE) {
+    if (pNtHeader->Signature != IMAGE_NT_SIGNATURE) {
         UnmapViewOfFile(this->pImage);
         CloseHandle(this->hMapping);
         CloseHandle(this->hFile);
@@ -54,9 +54,9 @@ bool PEParser::parse(std::string filename, uint32_t extra) {
 }
 
 IMAGE_SECTION_HEADER* PEParser::getSection(uint32_t required, uint32_t excluded) {
-    IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(this->ntHeader);
+    IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(this->pNtHeader);
 
-    for (uint16_t i = 0; i < this->ntHeader->FileHeader.NumberOfSections; i++) {
+    for (uint16_t i = 0; i < this->pNtHeader->FileHeader.NumberOfSections; i++) {
         if (section->Characteristics & required && (section->Characteristics & excluded) == 0) {
             return section;
         }
@@ -68,9 +68,9 @@ IMAGE_SECTION_HEADER* PEParser::getSection(uint32_t required, uint32_t excluded)
 const std::vector<IMAGE_SECTION_HEADER*> PEParser::getSections(uint32_t required, uint32_t excluded) {
     std::vector<IMAGE_SECTION_HEADER*> sections;
 
-    IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(this->ntHeader);
+    IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(this->pNtHeader);
 
-    for (uint16_t i = 0; i < this->ntHeader->FileHeader.NumberOfSections; i++) {
+    for (uint16_t i = 0; i < this->pNtHeader->FileHeader.NumberOfSections; i++) {
         if (section->Characteristics & required && (section->Characteristics & excluded) == 0) {
             sections.push_back(section);
         }
@@ -86,9 +86,9 @@ const std::vector<std::byte> PEParser::getSectionContent(IMAGE_SECTION_HEADER* s
 }
 
 IMAGE_SECTION_HEADER* PEParser::createSection(const char* name, std::vector<std::byte> contents, uint32_t characteristics) {
-    IMAGE_SECTION_HEADER* lastSection = IMAGE_FIRST_SECTION(this->ntHeader) + (this->ntHeader->FileHeader.NumberOfSections - 1);
+    IMAGE_SECTION_HEADER* lastSection = IMAGE_FIRST_SECTION(this->pNtHeader) + (this->pNtHeader->FileHeader.NumberOfSections - 1);
 
-    IMAGE_SECTION_HEADER* newSection = IMAGE_FIRST_SECTION(this->ntHeader) + this->ntHeader->FileHeader.NumberOfSections;
+    IMAGE_SECTION_HEADER* newSection = IMAGE_FIRST_SECTION(this->pNtHeader) + this->pNtHeader->FileHeader.NumberOfSections;
     ZeroMemory(newSection, sizeof(newSection));
     
     std::memcpy(newSection->Name, name, sizeof(newSection->Name));
@@ -100,8 +100,8 @@ IMAGE_SECTION_HEADER* PEParser::createSection(const char* name, std::vector<std:
     newSection->SizeOfRawData = alignToFile((uint32_t)contents.size());
     newSection->PointerToRawData = alignToFile(lastSection->SizeOfRawData, lastSection->PointerToRawData);
 
-    this->ntHeader->OptionalHeader.SizeOfImage = newSection->VirtualAddress + newSection->Misc.VirtualSize;
-    this->ntHeader->FileHeader.NumberOfSections++;
+    this->pNtHeader->OptionalHeader.SizeOfImage = newSection->VirtualAddress + newSection->Misc.VirtualSize;
+    this->pNtHeader->FileHeader.NumberOfSections++;
 
     std::memcpy(this->pImage + newSection->PointerToRawData, &contents[0], contents.size());
 
@@ -116,12 +116,12 @@ const inline uint32_t align(uint32_t size, uint32_t address, uint32_t alignment)
 }
 
 const inline uint32_t PEParser::alignToFile(uint32_t size, uint32_t address) {
-    uint32_t alignment = this->ntHeader->OptionalHeader.FileAlignment;
+    uint32_t alignment = this->pNtHeader->OptionalHeader.FileAlignment;
     return align(size, address, alignment);
 }
 
 const inline uint32_t PEParser::alignToSection(uint32_t size, uint32_t address) {
-    uint32_t alignment = this->ntHeader->OptionalHeader.SectionAlignment;
+    uint32_t alignment = this->pNtHeader->OptionalHeader.SectionAlignment;
     return align(size, address, alignment);
 }
 
@@ -130,9 +130,8 @@ const std::vector<std::byte> PEParser::getImage() {
     return image;
 }
 
-bool PEParser::replaceSection(IMAGE_SECTION_HEADER* section, std::vector<std::byte> newContents) {
+void PEParser::replaceSection(IMAGE_SECTION_HEADER* section, std::vector<std::byte> newContents) {
     std::memcpy(this->pImage + section->PointerToRawData, &newContents[0], section->SizeOfRawData);
-    return true;
 }
 
 void PEParser::save() {

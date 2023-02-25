@@ -32,3 +32,5 @@ typedef NTSTATUS(*xNtQueryInformationProcess)(HANDLE ProcessHandle, PROCESSINFOC
 Runtime runtime;
 Payload payload;
 std::vector<std::byte> radon0, radon1;
+
+bool relocated = false;

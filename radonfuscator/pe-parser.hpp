@@ -14,7 +14,7 @@ public:
 	const inline uint32_t alignToFile(uint32_t size, uint32_t address = 0);
 	const inline uint32_t alignToSection(uint32_t size, uint32_t address = 0);
 	const std::vector<std::byte> getImage();
-	bool replaceSection(IMAGE_SECTION_HEADER* section, std::vector<std::byte> newContents);
+	void replaceSection(IMAGE_SECTION_HEADER* section, std::vector<std::byte> newContents);
 
 	void save();
 	~PEParser();	
@@ -22,8 +22,8 @@ public:
 	std::byte* pImage = nullptr;
 	uint32_t imageSize = 0;
 private:
-	IMAGE_DOS_HEADER* dosHeader = nullptr;
-	IMAGE_NT_HEADERS* ntHeader = nullptr;
+	IMAGE_DOS_HEADER* pDosHeader = nullptr;
+	IMAGE_NT_HEADERS* pNtHeader = nullptr;
 
 	HANDLE hFile = nullptr;
 	HANDLE hMapping = nullptr;
