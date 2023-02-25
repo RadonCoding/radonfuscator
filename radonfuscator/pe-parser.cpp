@@ -65,7 +65,7 @@ IMAGE_SECTION_HEADER* PEParser::getSection(uint32_t required, uint32_t excluded)
     return nullptr;
 }
 
-std::vector<IMAGE_SECTION_HEADER*> PEParser::getSections(uint32_t required, uint32_t excluded) {
+const std::vector<IMAGE_SECTION_HEADER*> PEParser::getSections(uint32_t required, uint32_t excluded) {
     std::vector<IMAGE_SECTION_HEADER*> sections;
 
     IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(this->ntHeader);
@@ -79,7 +79,7 @@ std::vector<IMAGE_SECTION_HEADER*> PEParser::getSections(uint32_t required, uint
     return sections;
 }
 
-std::vector<std::byte> PEParser::getSectionContent(IMAGE_SECTION_HEADER* section) {
+const std::vector<std::byte> PEParser::getSectionContent(IMAGE_SECTION_HEADER* section) {
     std::byte* offset = this->pImage + section->PointerToRawData;
     std::vector<std::byte> contents(offset, offset + section->SizeOfRawData);
     return contents;
@@ -108,25 +108,24 @@ IMAGE_SECTION_HEADER* PEParser::createSection(const char* name, std::vector<std:
     return newSection;
 }
 
-uint32_t PEParser::alignToFile(uint32_t size, uint32_t address) {
-    uint32_t align = this->ntHeader->OptionalHeader.FileAlignment;
-
-    if (!(size % align)) {
+const inline uint32_t align(uint32_t size, uint32_t address, uint32_t alignment) {
+    if (!(size % alignment)) {
         return address + size;
     }
-    return address + (size / align + 1) * align;
+    return address + (size / alignment + 1) * alignment;
 }
 
-uint32_t PEParser::alignToSection(uint32_t size, uint32_t address) {
-    uint32_t align = this->ntHeader->OptionalHeader.SectionAlignment;
-
-    if (!(size % align)) {
-        return address + size;
-    }
-    return address + (size / align + 1) * align;
+const inline uint32_t PEParser::alignToFile(uint32_t size, uint32_t address) {
+    uint32_t alignment = this->ntHeader->OptionalHeader.FileAlignment;
+    return align(size, address, alignment);
 }
 
-std::vector<std::byte> PEParser::getImage() {
+const inline uint32_t PEParser::alignToSection(uint32_t size, uint32_t address) {
+    uint32_t alignment = this->ntHeader->OptionalHeader.SectionAlignment;
+    return align(size, address, alignment);
+}
+
+const std::vector<std::byte> PEParser::getImage() {
     std::vector<std::byte> image(this->pImage, this->pImage + this->imageSize);
     return image;
 }

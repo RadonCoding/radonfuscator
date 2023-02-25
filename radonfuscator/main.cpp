@@ -13,30 +13,6 @@
 
 namespace fs = std::filesystem;
 
-// Improvements: encrypt .rdata section and when a value is accessed decrypt
-
-std::string findString(PEParser& parser, const std::uintptr_t rva) {
-	const auto sections = parser.getSections(IMAGE_SCN_CNT_INITIALIZED_DATA);
-
-	std::string str;
-
-	for (const auto section : sections) {
-		std::vector<std::byte> contents = parser.getSectionContent(section);
-
-		if (rva >= section->VirtualAddress && rva < section->VirtualAddress + section->Misc.VirtualSize) {
-			const char* start = reinterpret_cast<const char*>(&contents[rva - section->VirtualAddress]);
-			const char* end = start + (section->Misc.VirtualSize - (rva - section->VirtualAddress));
-			const char* found = std::find(start, end, '\0');
-
-			if (found != end) {
-				str = std::string(start, found - start);
-				break;
-			}
-		}
-	}
-	return str;
-}
-
 bool infect(PEParser& parser, Runtime& runtime) {
 	IMAGE_SECTION_HEADER* codeSection = parser.getSection(IMAGE_SCN_CNT_CODE, IMAGE_SCN_CNT_UNINITIALIZED_DATA);
 

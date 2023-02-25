@@ -4,38 +4,62 @@
 #include <map>
 #include <iostream>
 #include <Windows.h>
-#include <unordered_map>
+
+using namespace std;
 
 constexpr std::size_t KEY_SIZE = 32;
 
 struct RuntimeInstruction {
 public:
-	void crypt() {
+	// Decrypt the instruction
+	inline void crypt() {
 		for (std::size_t i = 0; i < this->bytes.size(); i++) {
 			this->bytes[i] ^= this->key[i % this->key.size()];
 		}
 	}
 
-	const std::vector<std::byte> getBytes() const {
+	// Get the encrypted instruction bytes
+	inline const std::vector<std::byte>& getBytes() const {
 		return this->bytes;
 	}
 
-	const std::vector<std::byte> getKey() const {
+	// Get the key used for encryption
+	inline const std::vector<std::byte>& getKey() const {
 		return this->key;
 	}
 
+	// Serialize the instruction to a byte vector
+	const std::vector<std::byte> serialize() const {
+		std::vector<std::byte> result;
+		result.reserve(this->bytes.size() + KEY_SIZE);
+		result.insert(result.end(), this->bytes.begin(), this->bytes.end());
+		result.insert(result.end(), this->key.begin(), this->key.end());
+		return result;
+	}
+
+	// Deserialize a byte vector into a RuntimeInstruction object
+	static RuntimeInstruction deserialize(const std::vector<std::byte> serialized) {
+		std::vector<std::byte> instructionBytes(serialized.begin(), serialized.begin() + serialized.size() - KEY_SIZE);
+		std::vector<std::byte> key(serialized.end() - KEY_SIZE, serialized.end());
+		return RuntimeInstruction(instructionBytes, key);
+	}
+
+	// Create a new RuntimeInstruction with a random key
 	RuntimeInstruction(std::vector<std::byte> bytes) {
 		this->bytes = bytes;
 
+		// Use a more secure random number generator
 		std::random_device rd;
-		std::mt19937 gen(rd());
+		std::mt19937_64 gen(rd());
+		std::uniform_int_distribution<uint64_t> dist(0, 255);
 
 		for (std::size_t i = 0; i < KEY_SIZE; i++) {
-			this->key.push_back(static_cast<std::byte>(gen()));
+			this->key.push_back(static_cast<std::byte>(dist(gen)));
 		}
 		this->crypt();
 	}
 
+	// Create a new RuntimeInstruction with a given key
 	RuntimeInstruction(std::vector<std::byte> bytes, std::vector<std::byte> key) {
 		this->bytes = bytes;
 		this->key = key;
@@ -78,7 +102,7 @@ public:
 		return serialized;
 	}
 
-	void deserialize(const std::vector<std::byte>& serialized) {
+	void deserialize(const std::vector<std::byte> serialized) {
 		std::size_t offset = 0;
 
 		std::size_t instrsCount;
@@ -114,15 +138,15 @@ public:
 		offset += oldRVASize;
 	}
 
-	void addInstruction(std::uintptr_t rva, RuntimeInstruction runtimeInstr) {
+	inline void addInstruction(std::uintptr_t rva, RuntimeInstruction runtimeInstr) {
 		this->runtimeInstrs.emplace(rva, runtimeInstr);
 	}
 
-	bool hasInstruction(std::uintptr_t rva) {
+	inline bool hasInstruction(std::uintptr_t rva) {
 		return this->runtimeInstrs.contains(rva);
 	}
 
-	RuntimeInstruction& getInstruction(std::uintptr_t rva) {
+	inline RuntimeInstruction& getInstruction(std::uintptr_t rva) {
 		return this->runtimeInstrs[rva];
 	}
 
@@ -135,7 +159,7 @@ public:
 		return 0;
 	}
 
-	void setOldRVA(std::uintptr_t rva) {
+	inline void setOldRVA(std::uintptr_t rva) {
 		this->oldRVA = rva;
 	}
 
@@ -146,27 +170,27 @@ private:
 };
 
 struct Payload {
-	void encrypt() {		
+	inline void encrypt() {
 		for (std::size_t i = 0; i < this->bytes.size(); i++) {
 			this->bytes[i] ^= this->key[i % this->key.size()];
 		}
 	}
 
-	void decrypt() {
+	inline void decrypt() {
 		for (std::size_t i = 0; i < this->bytes.size(); i++) {
 			this->bytes[i] ^= this->key[i % this->key.size()];
 		}
 	}
 
-	const std::vector<std::byte> getBytes() const {
+	inline const std::vector<std::byte> getBytes() const {
 		return this->bytes;
 	}
 
-	const std::vector<std::byte> getKey() const {
+	inline const std::vector<std::byte> getKey() const {
 		return this->key;
 	}
 
-	std::vector<std::byte> serialize() const {
+	const std::vector<std::byte> serialize() const {
 		std::vector<std::byte> serialized;
 
 		const std::size_t bytesSize = this->bytes.size();
@@ -180,7 +204,7 @@ struct Payload {
 		return serialized;
 	}
 
-	void deserialize(const std::vector<std::byte>& serialized) {
+	void deserialize(const std::vector<std::byte> serialized) {
 		std::size_t offset = 0;
 
 		std::size_t bytesSize;
@@ -212,7 +236,7 @@ struct Payload {
 		return (T*)(pImage + rva);
 	}
 
-	Payload(std::vector<std::byte> bytes) {
+	Payload(const std::vector<std::byte> bytes) {
 		this->bytes = bytes;
 
 		std::random_device rd;
