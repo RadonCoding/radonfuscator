@@ -4,7 +4,7 @@
 #include <iomanip>
 #include <thread>
 
-std::uintptr_t getImageBase(const HANDLE hProcess) {
+uintptr_t getImageBase(const HANDLE hProcess) {
 	PROCESS_BASIC_INFORMATION processBasicInfo { 0 };
 
 	HMODULE ntdll = GetModuleHandleA("ntdll.dll");
@@ -29,7 +29,7 @@ std::uintptr_t getImageBase(const HANDLE hProcess) {
 	if (!ReadProcessMemory(hProcess, processBasicInfo.PebBaseAddress, &peb, sizeof(peb), nullptr)) {
 		return 0;
 	}
-	return reinterpret_cast<std::uintptr_t>(peb.ImageBaseAddress);
+	return reinterpret_cast<uintptr_t>(peb.ImageBaseAddress);
 }
 
 void relocate(std::byte* pImageBase) {
@@ -75,7 +75,7 @@ void relocate(std::byte* pImageBase) {
 
 bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORMATION* pProcessInfo) {
 	// Decrypt the payload
-	payload.decrypt();
+	payload.crypt();
 
 	std::vector<std::byte> payloadBytes = payload.getBytes();
 
@@ -136,12 +136,12 @@ bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORM
 	}
 
 	// Re-encrypt the payload
-	payload.encrypt();
+	payload.crypt();
 
 	// Write the new image base to Rdx + 16
 	WriteProcessMemory(pProcessInfo->hProcess, reinterpret_cast<void*>(context.Rdx + 16), &pImageBase, sizeof(pImageBase), nullptr);
 
-	context.Rcx = reinterpret_cast<std::uintptr_t>(pImageBase + ntHeader->OptionalHeader.AddressOfEntryPoint);
+	context.Rcx = reinterpret_cast<uintptr_t>(pImageBase + ntHeader->OptionalHeader.AddressOfEntryPoint);
 	SetThreadContext(pProcessInfo->hThread, &context);
 	ResumeThread(pProcessInfo->hThread);
 
@@ -166,12 +166,12 @@ void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 		return;
 	}
 
-	const std::uintptr_t imageBase = getImageBase(hProcess);
-	const std::uintptr_t oldRVA = runtime.getOldRVA();
+	const uintptr_t imageBase = getImageBase(hProcess);
+	const uintptr_t oldRVA = runtime.getOldRVA();
 
 	if (oldRVA != 0) {
 		if (runtime.hasInstruction(oldRVA)) {
-			std::uintptr_t oldVA = oldRVA - imageBase;
+			uintptr_t oldVA = oldRVA - imageBase;
 
 			std::byte breakpoint = static_cast<std::byte>(0xCC);
 
@@ -184,8 +184,8 @@ void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 		}
 	}
 
-	std::uintptr_t va = ctx.Rip - 1;
-	std::uintptr_t rva = va - imageBase;
+	uintptr_t va = ctx.Rip - 1;
+	uintptr_t rva = va - imageBase;
 
 	if (!runtime.hasInstruction(rva)) {
 		ctx.Rip += 1;
@@ -247,33 +247,12 @@ void handler(const HANDLE hProcess, const HANDLE hThread) {
 	WaitForSingleObject(hProcess, INFINITE);
 }
 
-template <typename T, typename... Args>
-T invoke(void* func, Args... args) {
-	CONTEXT context = { 0 };
-	HANDLE hThread = GetCurrentThread();
-	context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-	GetThreadContext(hThread, &context);
-	context.Dr0 = reinterpret_cast<uintptr_t>(func);
-	context.Dr7 |= 0x00000001;
-	SetThreadContext(hThread, &context);
-
-	T result = ((T(*)())func)(args);
-
-	context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-	GetThreadContext(hThread, &context);
-	context.Dr0 = 0;
-	context.Dr7 &= 0xFFFFFFFE;
-	SetThreadContext(hThread, &context);
-
-	return result;
-}
-
 int main(int argc, char* argv[]) {
 	std::byte* pImageBase = reinterpret_cast<std::byte*>(GetModuleHandleA(nullptr));
 
 	if (!relocated) {
 		relocated = true;
-		invoke(relocate, pImageBase);
+		relocate(pImageBase);
 	}
 
 	if (radon0.size() == 0 || radon1.size() == 0) {
@@ -291,11 +270,11 @@ int main(int argc, char* argv[]) {
 		commandLine.append(argv[i]);
 	}
 
-	if (!invoke(execute, argv[0], const_cast<char*>(commandLine.c_str()), &processInfo)) {
+	if (!execute(argv[0], commandLine.c_str(), &processInfo)) {
 		return EXIT_FAILURE;
 	}
 
-	invoke(handler, processInfo.hProcess, processInfo.hThread);
+	handler(processInfo.hProcess, processInfo.hThread);
 
 	if (processInfo.hProcess && processInfo.hProcess != INVALID_HANDLE_VALUE) {
 		CloseHandle(processInfo.hProcess);

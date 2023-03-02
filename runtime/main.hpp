@@ -1,6 +1,6 @@
 #pragma once
-#include "runtime.hpp"
 #include <Windows.h>
+#include "runtime.hpp"
 
 typedef enum _PROCESSINFOCLASS {
 	ProcessBasicInformation

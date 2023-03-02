@@ -5,11 +5,9 @@
 #include <Zycore/LibC.h>
 #include <Zydis/Zydis.h>
 #include <iomanip>
-#include <process.h>
 #include <filesystem>
 #include "pe-parser.hpp"
 #include "../runtime/runtime.hpp"
-#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -20,7 +18,7 @@ void infect(PEParser& parser, Runtime& runtime) {
 		return;
 	}
 
-	std::uintptr_t ip = reinterpret_cast<std::uintptr_t>(GetModuleHandleA(nullptr)) + codeSection->VirtualAddress;
+	uintptr_t ip = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)) + codeSection->VirtualAddress;
 
 	ZydisFormatter formatter;
 	ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
@@ -35,28 +33,26 @@ void infect(PEParser& parser, Runtime& runtime) {
 	size_t offset = 0;
 	size_t remaining = code.size();
 
-	std::random_device rd;
-	std::mt19937 gen(rd());
-
 	ZydisDecodedInstruction instr;
 
-	const std::byte breakpoint = static_cast<std::byte>(0xCC);
+	const std::byte breakpoint = std::byte(0xCC);
 
-	while (ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(&decoder, &code[offset], remaining, &instr))) {
-		if (offset + instr.length >= code.size()) {
-			break;
+	while (offset < code.size()) {
+		ZyanStatus status = ZydisDecoderDecodeBuffer(&decoder, &code[offset], remaining, &instr);
+
+		if (!ZYAN_SUCCESS(status)) {
+			offset++;
+			remaining--;
+			ip++;
+			continue;
 		}
-
-		std::vector<std::byte> instrBytes(&code[offset], &code[offset + instr.length]);
-
+		
 		if (instr.mnemonic != ZYDIS_MNEMONIC_INT3) {
-			code[offset++] = breakpoint;
-
-			for (int i = 0; i < instr.length - 1; i++) {
-				code[offset++] = static_cast<std::byte>(gen());
-			}
+			std::vector<std::byte> instrBytes(&code[offset], &code[offset + instr.length]);
 			const RuntimeInstruction runtimeInstr(instrBytes);
 			runtime.addInstruction(codeSection->VirtualAddress + offset, runtimeInstr);
+
+			std::fill(&code[offset], &code[offset + instr.length], breakpoint);
 		}
 		offset += instr.length;
 		remaining -= instr.length;
@@ -91,13 +87,13 @@ int main(int argc, char* argv[]) {
 	Payload payload(parser.getImage());
 
 	std::vector<std::byte> radon1 = payload.serialize();
-	uint32_t extraSize = parser.alignToSection((uint32_t)radon0.size() + (uint32_t)radon1.size());
+	uint32_t extraSize = parser.alignToSection(static_cast<uint32_t>(radon0.size())) + parser.alignToSection(static_cast<uint32_t>(radon1.size()));
 
 	parser.~PEParser();
 
-	// We now have the runtimeInstructions so we can start messing with the runtime
-
 	fs::remove(tempPath);
+
+	// We now have the runtimeInstructions so we can start messing with the runtime
 
 	const fs::path outputDir = inputPath.parent_path() / "Protected";
 
@@ -119,8 +115,6 @@ int main(int argc, char* argv[]) {
 	// .radon1 is the section containing the payload
 	parser.createSection(".radon0", radon0, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ);
 	parser.createSection(".radon1", radon1, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ);
-
-	parser.save();
 
 	return EXIT_SUCCESS;
 }
