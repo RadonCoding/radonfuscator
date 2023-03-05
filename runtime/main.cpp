@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <thread>
 
+// Gets the image base for the specified process
 uintptr_t getImageBase(const HANDLE hProcess) {
 	PROCESS_BASIC_INFORMATION processBasicInfo { 0 };
 
@@ -32,6 +33,7 @@ uintptr_t getImageBase(const HANDLE hProcess) {
 	return reinterpret_cast<uintptr_t>(peb.ImageBaseAddress);
 }
 
+// Relocating the image to avoid process dumping note this does break layering the obfuscation
 void relocate(std::byte* pImageBase) {
 	IMAGE_DOS_HEADER* pDosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(pImageBase);
 	IMAGE_NT_HEADERS* pNtHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(pImageBase + pDosHeader->e_lfanew);
@@ -73,7 +75,8 @@ void relocate(std::byte* pImageBase) {
 	((void(*)())oep)();
 }
 
-bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORMATION* pProcessInfo) {
+// Doing some process hollowing using own image
+bool execute(const char* currentPath, const char* commandLine, PROCESS_INFORMATION* pProcessInfo) {
 	// Decrypt the payload
 	payload.crypt();
 
@@ -93,7 +96,7 @@ bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORM
 
 	STARTUPINFOA startupInfo { 0 };
 
-	if (!CreateProcessA(executablePath, const_cast<char*>(commandLine), nullptr, nullptr, false, CREATE_SUSPENDED | DEBUG_PROCESS, nullptr, nullptr, &startupInfo, pProcessInfo)) {
+	if (!CreateProcessA(currentPath, const_cast<char*>(commandLine), nullptr, nullptr, false, CREATE_SUSPENDED | DEBUG_PROCESS, nullptr, nullptr, &startupInfo, pProcessInfo)) {
 		return false;
 	}
 
@@ -148,6 +151,7 @@ bool execute(const char* executablePath, const char* commandLine, PROCESS_INFORM
 	return true;
 }
 
+// The main handler that replaces the int 3h instructions with the real ones
 void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 	const HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, false, debugEvent.dwThreadId);
 
@@ -224,6 +228,7 @@ void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 	CloseHandle(hThread);
 }
 
+// Catches the debug events
 void handler(const HANDLE hProcess, const HANDLE hThread) {
 	DEBUG_EVENT debugEvent { 0 };
 

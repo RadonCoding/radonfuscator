@@ -61,14 +61,7 @@ void infect(PEParser& parser, Runtime& runtime) {
 	parser.replaceSection(codeSection, code);
 }
 
-int main(int argc, char* argv[]) {
-	/*std::cout << "Enter file: ";
-
-	fs::path inputPath;
-	std::cin >> inputPath;*/
-
-	fs::path inputPath = "C:\\Users\\Radon\\Desktop\\crack-me.exe";
-
+bool protect(const fs::path currentPath, const fs::path inputPath, const fs::path outputDir, fs::path* outputPath) {
 	const fs::path tempPath = fs::temp_directory_path() / inputPath.filename();
 	fs::copy(inputPath, tempPath, fs::copy_options::overwrite_existing);
 
@@ -76,7 +69,7 @@ int main(int argc, char* argv[]) {
 
 	if (!parser.parse(tempPath.string())) {
 		std::cout << "Failed to parse PE!" << std::endl;
-		return EXIT_FAILURE;
+		return false;
 	}
 
 	Runtime runtime;
@@ -95,26 +88,39 @@ int main(int argc, char* argv[]) {
 
 	// We now have the runtimeInstructions so we can start messing with the runtime
 
-	const fs::path outputDir = inputPath.parent_path() / "Protected";
-
 	if (fs::exists(outputDir)) {
 		fs::remove_all(outputDir);
 	}
 	fs::create_directory(outputDir);
 
-	const fs::path outputPath = outputDir / inputPath.filename();
+	*outputPath = outputDir / inputPath.filename();
 
-	const fs::path executablePath = argv[0];
-	const fs::path currentDir = executablePath.parent_path();
+	const fs::path currentDir = currentPath.parent_path();
 
-	fs::copy_file(currentDir / "runtime.exe", outputPath);
+	fs::copy_file(currentDir / "runtime.exe", *outputPath);
 
-	parser.parse(outputPath.string(), extraSize);
+	parser.parse(outputPath->string(), extraSize);
 
 	// .radon0 is the section containing the original instructions
 	// .radon1 is the section containing the payload
 	parser.createSection(".radon0", radon0, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ);
 	parser.createSection(".radon1", radon1, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ);
+}
 
+int main(int argc, char* argv[]) {
+	fs::path inputPath = argv[1];
+
+	const fs::path outputDir = inputPath.parent_path() / "Protected";
+
+	fs::path outputPath;
+
+	if (!protect(argv[0], inputPath, outputDir, &outputPath)) {
+		return EXIT_FAILURE;
+	}
+
+	// This was just for testing lmao
+	//for (int i = 0; i < 10; i++) {
+	//	protect(argv[0], outputPath, outputDir, &outputPath);
+	//}
 	return EXIT_SUCCESS;
 }
