@@ -2,4 +2,4 @@
 This is a obfuscator i made for fun it works the same way [nanomites](https://resources.infosecinstitute.com/topic/anti-memory-dumping-techniques) do but it targets all instructions.
 
 ## Note
-THis obfuscation should not be used for serious stuff the performance is horrible.
+This obfuscation should not be used for serious stuff the performance is horrible.
