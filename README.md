@@ -1,6 +1,6 @@
 Usage:
 ```
-Usage: radonfuscator.exe [file]
+Usage: radonfuscator.exe <file>
 ```
 
 ## What's this?
