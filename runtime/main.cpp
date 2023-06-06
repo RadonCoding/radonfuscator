@@ -6,7 +6,8 @@
 
 // Gets the image base for the specified process
 uintptr_t getImageBase(const HANDLE hProcess) {
-	PROCESS_BASIC_INFORMATION processBasicInfo { 0 };
+	PROCESS_BASIC_INFORMATION pbi;
+	memset(&pbi, 0, sizeof(pbi));
 
 	HMODULE ntdll = GetModuleHandleA("ntdll.dll");
 
@@ -15,88 +16,84 @@ uintptr_t getImageBase(const HANDLE hProcess) {
 	}
 
 	xNtQueryInformationProcess NtQueryInformationProcess = reinterpret_cast<xNtQueryInformationProcess>(GetProcAddress(ntdll, "NtQueryInformationProcess"));
-	NTSTATUS status = NtQueryInformationProcess(hProcess, ProcessBasicInformation, &processBasicInfo, sizeof(processBasicInfo), nullptr);
+	NTSTATUS status = NtQueryInformationProcess(hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), nullptr);
 
-	if (status != ERROR_SUCCESS) {
-		return 0;
-	}
+	if (status != ERROR_SUCCESS) return 0;
 
-	if (!processBasicInfo.PebBaseAddress) {
-		return 0;
-	}
+	PEB peb;
+	memset(&peb, 0, sizeof(peb));
 
-	PEB peb { 0 };
-
-	if (!ReadProcessMemory(hProcess, processBasicInfo.PebBaseAddress, &peb, sizeof(peb), nullptr)) {
+	if (!ReadProcessMemory(hProcess, pbi.PebBaseAddress, &peb, sizeof(peb), nullptr)) {
 		return 0;
 	}
 	return reinterpret_cast<uintptr_t>(peb.ImageBaseAddress);
 }
 
 // Relocating the image to avoid process dumping note this does break layering the obfuscation
-void relocate(std::byte* pImageBase) {
-	IMAGE_DOS_HEADER* pDosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(pImageBase);
-	IMAGE_NT_HEADERS* pNtHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(pImageBase + pDosHeader->e_lfanew);
+void relocate(std::byte* imageBase) {
+	IMAGE_DOS_HEADER* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(imageBase);
+	IMAGE_NT_HEADERS* ntHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(imageBase + dosHeader->e_lfanew);
 
-	uint32_t imageSize = pNtHeader->OptionalHeader.SizeOfImage;
+	uint32_t imageSize = ntHeader->OptionalHeader.SizeOfImage;
 
 	// Allocate a new block of memory
-	std::byte* pNewImageBase = reinterpret_cast<std::byte*>(VirtualAlloc(nullptr, imageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+	std::byte* newImageBase = reinterpret_cast<std::byte*>(VirtualAlloc(nullptr, imageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
-	if (!pNewImageBase) {
+	if (!newImageBase) {
 		return;
 	}
 
 	// Initialize the radon0 and radon1
-	IMAGE_SECTION_HEADER* pSection = IMAGE_FIRST_SECTION(pNtHeader);
+	IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(ntHeader);
 
-	for (uint16_t i = 0; i < pNtHeader->FileHeader.NumberOfSections; i++) {
+	for (uint16_t i = 0; i < ntHeader->FileHeader.NumberOfSections; i++) {
 		// .radon0 is the section containing the original instructions
 		// .radon1 is the section containing the payload
 
-		std::byte* pSectionAddr = pImageBase + pSection->VirtualAddress;
+		std::byte* sectionAddr = imageBase + section->VirtualAddress;
 
-		if (strcmp((char*)pSection->Name, ".radon0") == 0) {
-			radon0.insert(radon0.begin(), pSectionAddr, pSectionAddr + pSection->Misc.VirtualSize);
+		if (strcmp((char*)section->Name, ".radon0") == 0) {
+			radon0.insert(radon0.begin(), sectionAddr, sectionAddr + section->Misc.VirtualSize);
 		}
-		else if (strcmp((char*)pSection->Name, ".radon1") == 0) {
-			radon1.insert(radon1.begin(), pSectionAddr, pSectionAddr + pSection->Misc.VirtualSize);
+		else if (strcmp((char*)section->Name, ".radon1") == 0) {
+			radon1.insert(radon1.begin(), sectionAddr, sectionAddr + section->Misc.VirtualSize);
 		}
-		pSection++;
+		section++;
 	}
 
-	memcpy(pNewImageBase, pImageBase, imageSize);
+	memcpy(newImageBase, imageBase, imageSize);
 
-	VirtualFree(pImageBase, 0, MEM_RELEASE);
+	VirtualFree(imageBase, 0, MEM_RELEASE);
 
-	void* oep = pNewImageBase + pNtHeader->OptionalHeader.AddressOfEntryPoint;
+	void* oep = newImageBase + ntHeader->OptionalHeader.AddressOfEntryPoint;
 
 	// Call the entry point of the new block of memory
 	((void(*)())oep)();
 }
 
 // Doing some process hollowing using own image
-bool execute(const char* currentPath, const char* commandLine, PROCESS_INFORMATION* pProcessInfo) {
+bool execute(const char* currentPath, const char* commandLine, PROCESS_INFORMATION* pi) {
 	// Decrypt the payload
-	payload.crypt();
+	_payload.crypt();
 
-	std::vector<std::byte> payloadBytes = payload.getBytes();
+	std::vector<std::byte> bytes = _payload.getBytes();
 
-	IMAGE_DOS_HEADER* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(&payloadBytes[0]);
+	IMAGE_DOS_HEADER* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(&bytes[0]);
 
 	if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
 		return false;
 	}
 
-	IMAGE_NT_HEADERS* ntHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(&payloadBytes[0] + dosHeader->e_lfanew);
+	IMAGE_NT_HEADERS* ntHeader = reinterpret_cast<IMAGE_NT_HEADERS*>(&bytes[0] + dosHeader->e_lfanew);
 
 	if (ntHeader->Signature != IMAGE_NT_SIGNATURE) {
 		return false;
 	}
 
-	STARTUPINFOA startupInfo { 0 };
+	STARTUPINFOA si;
+	memset(&si, 0, sizeof(si));
 
-	if (!CreateProcessA(currentPath, const_cast<char*>(commandLine), nullptr, nullptr, false, CREATE_SUSPENDED | DEBUG_PROCESS, nullptr, nullptr, &startupInfo, pProcessInfo)) {
+	if (!CreateProcessA(currentPath, const_cast<char*>(commandLine), nullptr, nullptr, false, CREATE_SUSPENDED | DEBUG_PROCESS, nullptr, nullptr, &si, pi)) {
 		return false;
 	}
 
@@ -107,71 +104,73 @@ bool execute(const char* currentPath, const char* commandLine, PROCESS_INFORMATI
 	}
 
 	const xNtUnmapViewOfSection NtUnmapViewOfSection = reinterpret_cast<xNtUnmapViewOfSection>(GetProcAddress(ntdll, "NtUnmapViewOfSection"));
-	NtUnmapViewOfSection(pProcessInfo->hProcess, nullptr);
+	NtUnmapViewOfSection(pi->hProcess, nullptr);
 
-	CONTEXT context { 0 };
+	CONTEXT context;
+	memset(&context, 0, sizeof(context));
 	context.ContextFlags = CONTEXT_FULL;
 
-	if (!GetThreadContext(pProcessInfo->hThread, &context)) {
+	if (!GetThreadContext(pi->hThread, &context)) {
 		return false;
 	}
 
 	// Allocate space in the process for the PE
-	std::byte* pImageBase = reinterpret_cast<std::byte*>(VirtualAllocEx(pProcessInfo->hProcess, reinterpret_cast<void*>(ntHeader->OptionalHeader.ImageBase),
+	std::byte* imageBase = reinterpret_cast<std::byte*>(VirtualAllocEx(pi->hProcess, reinterpret_cast<void*>(ntHeader->OptionalHeader.ImageBase),
 		ntHeader->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 
-	if (!pImageBase) {
+	if (!imageBase) {
 		return false;
 	}
 
 	// Write the payload to the newly allocated image base
-	if (!WriteProcessMemory(pProcessInfo->hProcess, pImageBase, &payloadBytes[0], ntHeader->OptionalHeader.SizeOfHeaders, nullptr)) {
+	if (!WriteProcessMemory(pi->hProcess, imageBase, &bytes[0], ntHeader->OptionalHeader.SizeOfHeaders, nullptr)) {
 		return false;
 	}
 
 	IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(ntHeader);
 
 	for (WORD i = 0; i < ntHeader->FileHeader.NumberOfSections; i++) {
-		if (!WriteProcessMemory(pProcessInfo->hProcess, pImageBase + section->VirtualAddress, &payloadBytes[section->PointerToRawData], section->SizeOfRawData, nullptr)) {
+		if (!WriteProcessMemory(pi->hProcess, imageBase + section->VirtualAddress, &bytes[section->PointerToRawData], section->SizeOfRawData, nullptr)) {
 			return false;
 		}
 		section++;
 	}
 
 	// Re-encrypt the payload
-	payload.crypt();
+	_payload.crypt();
 
 	// Write the new image base to Rdx + 16
-	WriteProcessMemory(pProcessInfo->hProcess, reinterpret_cast<void*>(context.Rdx + 16), &pImageBase, sizeof(pImageBase), nullptr);
+	WriteProcessMemory(pi->hProcess, reinterpret_cast<void*>(context.Rdx + 16), &imageBase, sizeof(imageBase), nullptr);
 
-	context.Rcx = reinterpret_cast<uintptr_t>(pImageBase + ntHeader->OptionalHeader.AddressOfEntryPoint);
-	SetThreadContext(pProcessInfo->hThread, &context);
-	ResumeThread(pProcessInfo->hThread);
+	context.Rcx = reinterpret_cast<uintptr_t>(imageBase + ntHeader->OptionalHeader.AddressOfEntryPoint);
+	SetThreadContext(pi->hThread, &context);
+	ResumeThread(pi->hThread);
 
 	return true;
 }
 
 // The main handler that replaces the int 3h instructions with the real ones
-void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
-	const HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, false, debugEvent.dwThreadId);
+void handleDebugEvent(DEBUG_EVENT event, HANDLE process) {
+	HANDLE thread = OpenThread(THREAD_ALL_ACCESS, false, event.dwThreadId);
 
-	if (!hThread || hThread == INVALID_HANDLE_VALUE) {
+	if (!thread || thread == INVALID_HANDLE_VALUE) {
 		return;
 	}
 
-	SuspendThread(hThread);
+	SuspendThread(thread);
 
-	CONTEXT ctx { 0 };
+	CONTEXT ctx;
+	memset(&ctx, 0, sizeof(ctx));
 	ctx.ContextFlags = CONTEXT_CONTROL;
 
-	if (!GetThreadContext(hThread, &ctx)) {
-		ResumeThread(hThread);
-		CloseHandle(hThread);
+	if (!GetThreadContext(thread, &ctx)) {
+		ResumeThread(thread);
+		CloseHandle(thread);
 		return;
 	}
 
-	const uintptr_t imageBase = getImageBase(hProcess);
-	const uintptr_t oldRVA = runtime.getOldRVA();
+	uintptr_t imageBase = getImageBase(process);
+	uintptr_t oldRVA = runtime.getOldRVA();
 
 	if (oldRVA != 0) {
 		if (runtime.hasInstruction(oldRVA)) {
@@ -179,11 +178,11 @@ void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 
 			std::byte breakpoint = static_cast<std::byte>(0xCC);
 
-			RuntimeInstruction oldRuntimeInstr = runtime.getInstruction(oldRVA);
-			const std::vector<std::byte> oldInstrBytes = oldRuntimeInstr.getBytes();
+			RuntimeInstruction instr = runtime.getInstruction(oldRVA);
+			const std::vector<std::byte> oldInstrBytes = instr.getBytes();
 
 			for (size_t i = 0; i < oldInstrBytes.size(); i++) {
-				WriteProcessMemory(hProcess, reinterpret_cast<void*>(oldVA + i), &breakpoint, sizeof(breakpoint), nullptr);
+				WriteProcessMemory(process, reinterpret_cast<void*>(oldVA + i), &breakpoint, sizeof(breakpoint), nullptr);
 			}
 		}
 	}
@@ -193,71 +192,72 @@ void handleDebugEvent(const DEBUG_EVENT debugEvent, const HANDLE hProcess) {
 
 	if (!runtime.hasInstruction(rva)) {
 		ctx.Rip += 1;
-		SetThreadContext(hThread, &ctx);
-		ResumeThread(hThread);
-		CloseHandle(hThread);
+		SetThreadContext(thread, &ctx);
+		ResumeThread(thread);
+		CloseHandle(thread);
 		return;
 	}
 
-	RuntimeInstruction runtimeInstr = runtime.getInstruction(rva);
+	RuntimeInstruction instr = runtime.getInstruction(rva);
 
 	// Decrypt the instruction
-	runtimeInstr.crypt();
+	instr.crypt();
 
-	const std::vector<std::byte> instrBytes = runtimeInstr.getBytes();
+	const std::vector<std::byte> bytes = instr.getBytes();
 
 	ctx.Rip -= 1;
 
-	if (!WriteProcessMemory(hProcess, reinterpret_cast<void*>(va), &instrBytes[0], instrBytes.size(), nullptr)) {
+	if (!WriteProcessMemory(process, reinterpret_cast<void*>(va), &bytes[0], bytes.size(), nullptr)) {
 		// Re-encrypt the instruction
-		runtimeInstr.crypt();
+		instr.crypt();
 
-		SetThreadContext(hThread, &ctx);
-		ResumeThread(hThread);
-		CloseHandle(hThread);
+		SetThreadContext(thread, &ctx);
+		ResumeThread(thread);
+		CloseHandle(thread);
 		return;
 	}
 
 	// Re-encrypt the instruction
-	runtimeInstr.crypt();
+	instr.crypt();
 
 	runtime.setOldRVA(rva);
 
-	SetThreadContext(hThread, &ctx);
-	ResumeThread(hThread);
-	CloseHandle(hThread);
+	SetThreadContext(thread, &ctx);
+	ResumeThread(thread);
+	CloseHandle(thread);
 }
 
 // Catches the debug events
-void handler(const HANDLE hProcess, const HANDLE hThread) {
-	DEBUG_EVENT debugEvent { 0 };
+void handler(HANDLE process, HANDLE thread) {
+	DEBUG_EVENT event;
+	memset(&event, 0, sizeof(event));
 
 	bool running = true;
 
 	while (running) {
-		WaitForDebugEvent(&debugEvent, INFINITE);
+		WaitForDebugEvent(&event, INFINITE);
 
-		switch (debugEvent.dwDebugEventCode) {
+		switch (event.dwDebugEventCode) {
 		case EXCEPTION_DEBUG_EVENT:
-			handleDebugEvent(debugEvent, hProcess);
+			handleDebugEvent(event, process);
 			break;
 		case EXIT_PROCESS_DEBUG_EVENT:
 			running = false;
 			break;
 		}
-		ContinueDebugEvent(debugEvent.dwProcessId, debugEvent.dwThreadId, DBG_CONTINUE);
+		ContinueDebugEvent(event.dwProcessId, event.dwThreadId, DBG_CONTINUE);
 	}
 
-	ContinueDebugEvent(debugEvent.dwProcessId, debugEvent.dwThreadId, DBG_CONTINUE);
-	WaitForSingleObject(hProcess, INFINITE);
+	ContinueDebugEvent(event.dwProcessId, event.dwThreadId, DBG_CONTINUE);
+	WaitForSingleObject(process, INFINITE);
 }
 
 int main(int argc, char* argv[]) {
-	std::byte* pImageBase = reinterpret_cast<std::byte*>(GetModuleHandleA(nullptr));
+	std::byte* imageBase = reinterpret_cast<std::byte*>(GetModuleHandleA(nullptr));
 
 	if (!relocated) {
 		relocated = true;
-		relocate(pImageBase);
+		relocate(imageBase);
 	}
 
 	if (radon0.size() == 0 || radon1.size() == 0) {
@@ -265,28 +265,29 @@ int main(int argc, char* argv[]) {
 	}
 
 	runtime.deserialize(radon0);
-	payload.deserialize(radon1);
+	_payload.deserialize(radon1);
 
-	PROCESS_INFORMATION processInfo { 0 };
+	PROCESS_INFORMATION pi;
+	memset(&pi, 0, sizeof(pi));
 
-	std::string commandLine;
+	std::string cmd;
 
 	for (int i = 0; i < argc; i++) {
-		commandLine.append(argv[i]);
+		cmd.append(argv[i]);
 	}
 
-	if (!execute(argv[0], commandLine.c_str(), &processInfo)) {
+	if (!execute(argv[0], cmd.c_str(), &pi)) {
 		return EXIT_FAILURE;
 	}
 
-	handler(processInfo.hProcess, processInfo.hThread);
+	handler(pi.hProcess, pi.hThread);
 
-	if (processInfo.hProcess && processInfo.hProcess != INVALID_HANDLE_VALUE) {
-		CloseHandle(processInfo.hProcess);
+	if (pi.hProcess && pi.hProcess != INVALID_HANDLE_VALUE) {
+		CloseHandle(pi.hProcess);
 	}
 
-	if (processInfo.hThread && processInfo.hThread != INVALID_HANDLE_VALUE) {
-		CloseHandle(processInfo.hThread);
+	if (pi.hThread && pi.hThread != INVALID_HANDLE_VALUE) {
+		CloseHandle(pi.hThread);
 	}
 	return EXIT_SUCCESS;
 }

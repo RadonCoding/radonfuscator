@@ -31,8 +31,8 @@ typedef struct _PROCESS_BASIC_INFORMATION {
 typedef NTSTATUS(*xNtUnmapViewOfSection)(HANDLE ProcessHandle, PVOID BaseAddress);
 typedef NTSTATUS(*xNtQueryInformationProcess)(HANDLE ProcessHandle, PROCESSINFOCLASS ProcessInformationClass, PVOID ProcessInformation, ULONG ProcessInformationLength, PULONG ReturnLength);
 
-Runtime runtime;
-Payload payload;
-std::vector<std::byte> radon0, radon1;
+Runtime _runtime;
+Payload _payload;
+std::vector<std::byte> _radon0, _radon1;
 
-bool relocated = false;
+bool _relocated = false;
